@@ -17,7 +17,7 @@ class JJWXCBackupTool:
     def __init__(self):
         # 创建输出目录
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.output_dir = f"晋江作品备份_{timestamp}"
+        self.output_dir = f"backup_{timestamp}"
         os.makedirs(self.output_dir, exist_ok=True)
         
         # 设置会话
