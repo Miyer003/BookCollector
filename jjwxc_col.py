@@ -177,87 +177,28 @@ class JJWXCBackupTool:
         return 0
     
     def check_login(self):
-        """检查登录状态（增加详细调试信息）"""
+        """检查登录状态"""
+        self.author_backend_url = "https://my.jjwxc.net/backend/oneauthor_login.php"
         try:
-            # 尝试多个可能的作者后台URL
-            test_urls = [
-                "https://my.jjwxc.net/backend/oneauthor_login.php",
-                "https://my.jjwxc.net/backend/",
-                "https://my.jjwxc.net/oneauthor_novellist",
-                "https://my.jjwxc.net/oneauthor_novellist.php",
-                "https://my.jjwxc.net/backend/index.php",
-                "https://my.jjwxc.net/"
-            ]
-            
-            print("正在验证登录状态...")
-            
-            for test_url in test_urls:
-                try:
-                    # 使用更精确的Referer
-                    headers = self.headers.copy()
-                    headers['Referer'] = 'https://my.jjwxc.net/'
-                    
-                    print(f"尝试访问: {test_url}")
-                    response = self.session.get(test_url, headers=headers, timeout=15)
-                    
-                    # 保存调试信息
-                    url_part = test_url.split('/')[-1] or 'root'
-                    debug_file = os.path.join(self.output_dir, f"login_debug_{url_part}.html")
-                    with open(debug_file, 'w', encoding='utf-8') as f:
-                        f.write(response.text)
-                    print(f"调试信息已保存到: {debug_file}")
-                    
-                    # 检查多个可能的登录成功标志（包括中文和英文）
-                    login_success_keywords = [
-                        "我的作品", "作品管理", "退出登录", "作者中心", "作者后台", "个人中心",
-                        "作品列表", "发布作品", "管理作品", "作者工具", "novellist", "author",
-                        "作品信息", "章节管理", "editnovel", "novelinfo", "managenovel",
-                        "点我更新", "清缓存", "重算积分", "onebook.php", "积分系数"
-                    ]
-                    
-                    content_lower = response.text.lower()
-                    # 检查是否包含作品管理相关的链接和内容
-                    has_novel_management = ("managenovel.php" in response.text or 
-                                          "onebook.php" in response.text or
-                                          "积分系数" in response.text or
-                                          "清缓存" in response.text)
-                    
-                    if any(keyword in response.text for keyword in login_success_keywords) or has_novel_management:
-                        print(f"✓ 登录状态验证成功！URL: {test_url}")
-                        # 保存成功的URL供后续使用
-                        self.author_backend_url = test_url
-                        return True
-                    
-                    if response.status_code == 404:
-                        print(f"URL不存在: {test_url}")
-                        continue
-                    else:
-                        print(f"URL访问成功但未找到登录标志: {test_url}")
-                        # 检查是否有登录表单
-                        if ("登录" in response.text and "密码" in response.text) or \
-                           ("login" in content_lower and "password" in content_lower):
-                            print("检测到登录表单，Cookie可能已过期")
-                        continue
-                        
-                except Exception as url_error:
-                    print(f"访问 {test_url} 出错: {str(url_error)}")
-                    continue
-            
-            print("✗ 所有URL都验证失败")
-            print("可能原因: 1) Cookie过期 2) Cookie无效 3) 站点结构改变")
-            return False
-            
+            print("正在检查登录状态...")
+            response = self.session.get(self.author_backend_url, headers=self.headers, timeout=15)
+            response.encoding = 'gb18030'
+            html = response.text
+
+            # 判断页面是否包含登录提示
+            if "晋江文学城" in html:
+                print("登入成功")
+                return True
+            elif "请登录" in html or "登录晋江作者后台" in html or "账号" in html:
+                print("未登录晋江作者后台，请检查Cookie是否有效")
+                return False
         except Exception as e:
-            print(f"登录检查异常: {str(e)}")
+            print(f"检查登录状态时出错: {e}")
             return False
-    
+        
     def get_novel_list(self):
         """获取作者作品列表"""
-        # 使用已经验证成功的URL
-        if self.author_backend_url:
-            author_url = self.author_backend_url
-        else:
-            author_url = "https://my.jjwxc.net/backend/oneauthor_login.php"
+        author_url = "https://my.jjwxc.net/backend/oneauthor_login.php"
         
         try:
             print(f"获取作品列表: {author_url}")
@@ -366,127 +307,170 @@ class JJWXCBackupTool:
             print(f"获取作品列表出错: {str(e)}")
             return []
     
+    def get_intro_from_backend(self, novel_id):
+        """从作者后台获取作品简介"""
+        try:
+            backend_url = f"https://my.jjwxc.net/backend/managenovel.php?novelid={novel_id}"
+            print(f"访问后台章节管理页面: {backend_url}")
+            headers = self.headers.copy()
+            headers['Referer'] = 'https://my.jjwxc.net/backend/'
+            response = self.session.get(backend_url, headers=headers, timeout=30)
+            response.encoding = 'gb18030'
+            soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
+            novel_intro = ""
+            intro_textarea = soup.find('textarea', {'id': 'novelintro'})
+            if intro_textarea:
+                novel_intro = intro_textarea.get_text(strip=True)
+                print(f"获取到作品简介: {len(novel_intro)} 字符")
+            return novel_intro
+        except Exception as e:
+            print(f"获取作品简介失败: {e}")
+            return ""
+
     def get_chapters(self, novel_link):
-        """获取作品章节列表（暂只支持免费章节）"""
+        """获取作品章节列表"""
         if not novel_link:
             return []
             
         try:
-            # 从管理链接中提取novelid
+            # 提取novelid
             novel_id_match = re.search(r'novelid=(\d+)', novel_link)
             if not novel_id_match:
                 print(f"无法从链接中提取作品ID: {novel_link}")
                 return []
-            
             novel_id = novel_id_match.group(1)
-            public_url = f"https://www.jjwxc.net/onebook.php?novelid={novel_id}"
-            
-            print(f"获取章节列表: {public_url}")
-            response = self.session.get(public_url, headers=self.headers, timeout=25)
+            backend_url = f"https://my.jjwxc.net/backend/managenovel.php?novelid={novel_id}"
+            print(f"获取所有章节列表: {backend_url}")
+            response = self.session.get(backend_url, headers=self.headers, timeout=30)
             response.encoding = 'gb18030'
-            
             soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
             chapters = []
-            
-            # 查找免费章节链接
-            free_chapter_links = soup.find_all('a', href=lambda x: x and f'novelid={novel_id}&chapterid=' in x)
-            print(f"找到 {len(free_chapter_links)} 个免费章节")
-            
-            # 处理免费章节
-            for idx, link in enumerate(free_chapter_links):
-                href = link['href']
-                chapter_id_match = re.search(r'chapterid=(\d+)', href)
-                if chapter_id_match:
-                    chapter_id = chapter_id_match.group(1)
-                    title = link.get_text(strip=True) or f"第{idx+1}章"
-                    
-                    # 确保链接完整
-                    if not href.startswith('http'):
-                        if href.startswith('//'):
-                            href = 'https:' + href
-                        elif href.startswith('/'):
-                            href = 'https://www.jjwxc.net' + href
-                        else:
-                            href = 'https://www.jjwxc.net/' + href
-                    
+            # 晋江后台章节管理页面通常有章节列表table
+            # 解析所有tr（每一章）
+            for idx, tr in enumerate(soup.find_all('tr')):
+                chapter_id_tag = tr.find('input', {'name': 'chapterid'})
+                title_tag = tr.find('a', href=True)
+                if chapter_id_tag and title_tag:
+                    chapter_id = chapter_id_tag['value']
+                    title = title_tag.get_text(strip=True)
+                    # 判断是否VIP章节
+                    is_vip = False
+                    # 通常VIP章节会有VIP标识（如class、span、img等）
+                    vip_tag = tr.find('span', class_=lambda x: x and 'vip' in x.lower())
+                    if vip_tag or 'VIP' in title or 'vip' in title.lower():
+                        is_vip = True
+                    # 拼接访问链接
+                    if is_vip:
+                        link = f"https://my.jjwxc.net/onebook_vip.php?novelid={novel_id}&chapterid={chapter_id}"
+                    else:
+                        link = f"https://www.jjwxc.net/onebook.php?novelid={novel_id}&chapterid={chapter_id}"
                     chapters.append({
                         'id': chapter_id,
                         'title': title,
-                        'link': href,
-                        'chapter_number': idx + 1
+                        'link': link,
+                        'chapter_number': idx + 1,
+                        'is_vip': is_vip
                     })
-            
-            # 按章节ID排序
-            chapters.sort(key=lambda x: int(x['id']))
-            
-            if chapters:
-                print(f"成功解析 {len(chapters)} 个章节")
-                return chapters
-            else:
-                print("未找到任何章节")
-                return []
-            
+            vip_count = sum(1 for c in chapters if c['is_vip'])
+            free_count = len(chapters) - vip_count
+            print(f"成功解析 {len(chapters)} 个章节，其中免费章节数量：{free_count}，VIP章节数量：{vip_count}")
+            return chapters
         except Exception as e:
             print(f"获取章节列表出错: {str(e)}")
             return []
     
-    def get_chapter_content(self, chapter_link):
-        """获取章节内容"""
+    def get_chapter_content(self, chapter_link, is_vip=False):
+        """获取章节内容（区分免费和VIP章节）"""
         if not chapter_link:
             return "章节链接无效"
-            
         try:
-            # 确保链接完整
-            if not chapter_link.startswith('http'):
-                chapter_link = f"https://www.jjwxc.net{chapter_link}"
-            
-            print(f"  获取章节内容...")
-            response = self.session.get(chapter_link, headers=self.headers, timeout=30)
-            response.encoding = 'gb18030'
-            
-            soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
-            
-            # 提取正文内容
-            main_content = ""
-            novelbody_div = soup.find('div', class_='novelbody')
-            if novelbody_div:
-                text_container = novelbody_div.select_one('div > div')
-                if text_container:
-                    content_parts = []
-                    for element in text_container.children:
-                        if getattr(element, 'name', None) == 'br':
-                            content_parts.append('\n')
-                        elif getattr(element, 'string', None) and element.string.strip():
-                            content_parts.append(element.string.strip())
-                    main_content = ''.join(content_parts)
-            
-            # 提取作者有话说
-            author_notes = ""
-            note_wrapper = soup.find('div', id='note_danmu_wrapper')
-            if note_wrapper:
-                note_str = note_wrapper.find('div', id='note_str')
-                if note_str:
-                    html_content = str(note_str)
-                    html_content = re.sub(r'<br\s*/?>', '\n', html_content, flags=re.IGNORECASE)
-                    clean_soup = BeautifulSoup(html_content, 'html.parser')
-                    author_notes = clean_soup.get_text(strip=True)
-            
-            # 组合内容
-            result_parts = []
-            if main_content and len(main_content) > 20:
-                result_parts.append(main_content)
-            
-            if author_notes and len(author_notes) > 10:
-                result_parts.append('\n\n【作者有话说】')
-                result_parts.append(author_notes)
-            
-            if result_parts:
-                result = ''.join(result_parts)
-                if len(result.strip()) > 30:
-                    return result
-            
-            return "内容获取失败：未找到有效内容"
-            
+            # 免费章节处理逻辑
+            if not is_vip:
+                if not chapter_link.startswith('http'):
+                    chapter_link = f"https://www.jjwxc.net{chapter_link}"
+                print(f"  获取免费章节内容...")
+                response = self.session.get(chapter_link, headers=self.headers, timeout=30)
+                response.encoding = 'gb18030'
+                soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
+                main_content = ""
+                novelbody_div = soup.find('div', class_='novelbody')
+                if novelbody_div:
+                    text_container = novelbody_div.select_one('div > div')
+                    if text_container:
+                        content_parts = []
+                        for element in text_container.children:
+                            if getattr(element, 'name', None) == 'br':
+                                content_parts.append('\n')
+                            elif getattr(element, 'string', None) and element.string.strip():
+                                content_parts.append(element.string.strip())
+                        main_content = ''.join(content_parts)
+                author_notes = ""
+                note_wrapper = soup.find('div', id='note_danmu_wrapper')
+                if note_wrapper:
+                    note_str = note_wrapper.find('div', id='note_str')
+                    if note_str:
+                        html_content = str(note_str)
+                        html_content = re.sub(r'<br\s*/?>', '\n', html_content, flags=re.IGNORECASE)
+                        clean_soup = BeautifulSoup(html_content, 'html.parser')
+                        author_notes = clean_soup.get_text(strip=True)
+                result_parts = []
+                if main_content and len(main_content) > 20:
+                    result_parts.append(main_content)
+                if author_notes and len(author_notes) > 10:
+                    result_parts.append('\n\n【作者有话说】')
+                    result_parts.append(author_notes)
+                if result_parts:
+                    result = ''.join(result_parts)
+                    if len(result.strip()) > 30:
+                        return result
+                return "内容获取失败：未找到有效内容"
+            # VIP章节处理逻辑（预留结构，待填写）
+            else:
+                if not chapter_link.startswith('http'):
+                    chapter_link = f"https://my.jjwxc.net{chapter_link}"
+                print(f"  获取VIP章节内容...")
+                response = self.session.get(chapter_link, headers=self.headers, timeout=30)
+                response.encoding = 'gb18030'
+                soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
+                main_content = ""
+                # 提取VIP正文内容
+                novelbody_div = soup.find('div', class_='novelbody')
+                if novelbody_div:
+                    noveltext_div = novelbody_div.find('div', class_=lambda x: x and x.startswith('noveltext'))
+                    if noveltext_div:
+                        content_div = noveltext_div.find('div', id=lambda x: x and x.startswith('content_'))
+                        if content_div:
+                            content_parts = []
+                            for element in content_div.children:
+                                if getattr(element, 'name', None) == 'br':
+                                    content_parts.append('\n')
+                                elif getattr(element, 'string', None) and element.string.strip():
+                                    content_parts.append(element.string.strip())
+                            main_content = ''.join(content_parts)
+                author_notes = ""
+                # 提取VIP作者有话说
+                if novelbody_div:
+                    noveltext_div = novelbody_div.find('div', class_=lambda x: x and x.startswith('noveltext'))
+                    if noveltext_div:
+                        note_wrapper = noveltext_div.find('div', id='note_danmu_wrapper')
+                        if note_wrapper:
+                            note_main = note_wrapper.find('div', id='note_main')
+                            if note_main:
+                                html_content = str(note_main)
+                                html_content = re.sub(r'<br\s*/?>', '\n', html_content, flags=re.IGNORECASE)
+                                clean_soup = BeautifulSoup(html_content, 'html.parser')
+                                author_notes = clean_soup.get_text(strip=True)
+                result_parts = []
+                if main_content and len(main_content) > 20:
+                    result_parts.append(main_content)
+                if author_notes and len(author_notes) > 10:
+                    result_parts.append('\n\n【作者有话说】')
+                    result_parts.append(author_notes)
+                if result_parts:
+                    result = ''.join(result_parts)
+                    if len(result.strip()) > 30:
+                        return result
+                return "内容获取失败：未找到有效内容"
         except Exception as e:
             print(f"  章节内容获取出错: {str(e)}")
             return f"内容获取失败：{str(e)}"
@@ -515,6 +499,13 @@ class JJWXCBackupTool:
                 f"状态: {novel.get('status', '未知')}"
             )
             info_run.font.size = Pt(10)
+            
+            # 获取作品简介并插入到状态下方
+            novel_intro = self.get_intro_from_backend(novel['id'])
+            if novel_intro:
+                intro_paragraph = doc.add_paragraph(novel_intro)
+                intro_paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                intro_paragraph.runs[0].font.size = Pt(11)
             
             # 添加分页符
             doc.add_page_break()
@@ -703,12 +694,7 @@ class JJWXCBackupTool:
         print("正在初始化...")
         
         # 检查登录状态
-        if not self.check_login():
-            print("❌ 无法验证登录状态，可能Cookie已过期或不正确")
-            print(f"请检查 {COOKIE_FILE} 文件内容是否有效")
-            return
-        
-        print("✓ 登录验证成功")
+        self.check_login()
         
         # 获取作品列表
         print("正在获取作品列表...")
