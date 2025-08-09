@@ -421,7 +421,7 @@ class JJWXCBackupTool:
 
     def get_chapters(self, novel_link):
         """
-        获取作品的完整章节列表
+        获取作品的完整章节列表（统一后台方案）
         
         参数：
             novel_link (str): 作品管理页面链接
@@ -430,21 +430,15 @@ class JJWXCBackupTool:
             list: 章节信息列表，每个元素包含：
                 - id: 章节ID
                 - title: 章节标题  
-                - link: 章节访问链接
+                - link: 后台编辑页面链接（统一格式）
                 - chapter_number: 章节编号
                 - is_vip: 是否VIP章节
                 
-        功能流程：
-        1. 从链接提取作品ID
-        2. 访问后台章节管理页面
-        3. 解析章节表格（包括隐藏行）
-        4. 区分免费和VIP章节
-        5. 按章节编号排序
-        
-        章节识别逻辑：
-        - VIP章节：链接包含'onebook_vip.php'
-        - 免费章节：其他章节
-        - 隐藏章节：包括display:none的行
+        新方案说明：
+        - 统一使用后台编辑页面获取所有章节内容
+        - 避免前台页面结构变化导致的解析问题
+        - 免费和VIP章节使用相同的获取逻辑
+        - 提高代码的稳定性和可维护性
         """
         if not novel_link:
             return []
@@ -464,53 +458,161 @@ class JJWXCBackupTool:
             soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
             chapters = []
             
-            # 查找章节表格，包括隐藏的章节行
-            # 查找所有包含章节信息的tr行，包括style="display:none;"的隐藏行
-            chapter_rows = soup.find_all('tr', {'bgcolor': '#eefaee'})
+            # 新的章节解析策略：通过多种方法组合查找
+            # 方法1：查找所有包含chapterid的input，通过其父元素定位章节行
+            chapter_inputs = soup.find_all('input', {'name': 'chapterid'})
+            print(f"找到 {len(chapter_inputs)} 个章节ID输入框")
             
-            for tr in chapter_rows:
-                # 查找章节ID input
-                chapter_id_input = tr.find('input', {'name': 'chapterid'})
-                if not chapter_id_input:
+            # 过滤掉表单提交用的hidden input（通常在form中且value较大）
+            valid_chapter_inputs = []
+            for input_elem in chapter_inputs:
+                # 检查是否在表单中且value很大（可能是下一章节的ID）
+                form_parent = input_elem.find_parent('form')
+                if form_parent and input_elem.get('type') == 'hidden':
+                    # 这可能是表单提交用的input，跳过
                     continue
+                valid_chapter_inputs.append(input_elem)
+            
+            print(f"有效章节输入框: {len(valid_chapter_inputs)}")
+            
+            # 如果没有找到有效的章节输入框，尝试其他方法
+            if not valid_chapter_inputs:
+                print("尝试备用方法：查找章节链接")
+                # 方法2：查找所有指向章节的链接
+                all_links = soup.find_all('a', href=True)
+                chapter_links = []
+                for link in all_links:
+                    href = link.get('href', '')
+                    if 'onebook' in href and ('novelid=' in href or 'chapterid=' in href):
+                        chapter_links.append(link)
+                
+                print(f"找到 {len(chapter_links)} 个章节链接")
+                
+                # 从链接中提取章节信息
+                for link in chapter_links:
+                    href = link.get('href')
+                    chapter_id_match = re.search(r'chapterid=(\d+)', href)
                     
-                chapter_id = chapter_id_input.get('value')
-                if not chapter_id:
-                    continue
-                
-                # 查找章节标题链接
-                title_link = tr.find('a', href=True)
-                if not title_link:
-                    continue
+                    if not chapter_id_match:
+                        continue
                     
-                title = title_link.get_text(strip=True)
-                href = title_link.get('href')
+                    chapter_id = chapter_id_match.group(1)
+                    title = link.get_text(strip=True)
+                    
+                    # 判断是否VIP章节
+                    is_vip = 'onebook_vip.php' in href or '[VIP]' in title
+                    
+                    # 尝试从链接的父元素中获取章节编号
+                    parent_tr = link.find_parent('tr')
+                    chapter_number = len(chapters) + 1  # 默认按顺序编号
+                    
+                    if parent_tr:
+                        tds = parent_tr.find_all('td')
+                        for td in tds:
+                            text = td.get_text(strip=True)
+                            # 查找数字编号
+                            number_match = re.search(r'^(\d+)$', text)
+                            if number_match:
+                                chapter_number = int(number_match.group(1))
+                                break
+                    
+                    # 构建统一的后台编辑链接
+                    edit_link = f"https://my.jjwxc.net/backend/chaptermodify.php?novelid={novel_id}&chapterid={chapter_id}"
+                    
+                    chapters.append({
+                        'id': chapter_id,
+                        'title': title,
+                        'link': edit_link,  # 统一使用后台编辑链接
+                        'chapter_number': chapter_number,
+                        'is_vip': is_vip
+                    })
+            
+            else:
+                # 使用有效的章节输入框解析章节
+                for input_elem in valid_chapter_inputs:
+                    chapter_id = input_elem.get('value')
+                    if not chapter_id:
+                        continue
+                    
+                    # 查找关联的章节行
+                    parent_tr = input_elem.find_parent('tr')
+                    if not parent_tr:
+                        continue
+                    
+                    # 查找章节标题链接
+                    title_link = parent_tr.find('a', href=True)
+                    if not title_link:
+                        continue
+                        
+                    title = title_link.get_text(strip=True)
+                    href = title_link.get('href')
+                    
+                    # 判断是否VIP章节
+                    is_vip = 'onebook_vip.php' in href or '[VIP]' in title
+                    
+                    # 提取章节编号
+                    chapter_number = len(chapters) + 1  # 默认编号
+                    tds = parent_tr.find_all('td')
+                    if len(tds) > 1:
+                        try:
+                            chapter_num_text = tds[1].get_text(strip=True)
+                            chapter_number = int(chapter_num_text)
+                        except (ValueError, IndexError):
+                            pass
+                    
+                    # 构建统一的后台编辑链接
+                    edit_link = f"https://my.jjwxc.net/backend/chaptermodify.php?novelid={novel_id}&chapterid={chapter_id}"
+                    
+                    chapters.append({
+                        'id': chapter_id,
+                        'title': title,
+                        'link': edit_link,  # 统一使用后台编辑链接
+                        'chapter_number': chapter_number,
+                        'is_vip': is_vip
+                    })
+            
+            # 如果常规方法都失败，尝试通过最大章节号生成章节列表
+            if not chapters:
+                print("尝试最终方案：通过最大章节号生成章节列表")
                 
-                # 判断是否VIP章节 - 通过链接或标题中的VIP标识
-                is_vip = False
-                if 'onebook_vip.php' in href or '[VIP]' in title_link.get_text():
-                    is_vip = True
+                # 查找最大章节号提示
+                max_chapter_hints = [
+                    soup.find(text=re.compile(r'已更新至第(\d+)章')),
+                    soup.find(text=re.compile(r'第(\d+)章', re.I))
+                ]
                 
-                # 提取章节编号（从第二个td中获取）
-                chapter_num_td = tr.find_all('td')[1]  # 第二个td包含章节编号
-                chapter_number = int(chapter_num_td.get_text(strip=True))
+                max_chapter_num = 0
+                for hint in max_chapter_hints:
+                    if hint:
+                        match = re.search(r'第(\d+)章', str(hint))
+                        if match:
+                            chapter_num = int(match.group(1))
+                            max_chapter_num = max(max_chapter_num, chapter_num)
                 
-                # 构建完整的访问链接
-                if not href.startswith('http'):
-                    if href.startswith('//'):
-                        link = f"https:{href}"
-                    else:
-                        link = f"https://www.jjwxc.net{href}"
-                else:
-                    link = href
+                # 也可以查看placeholder中的章节号（下一章节号）
+                placeholders = soup.find_all('input', {'placeholder': re.compile(r'第(\d+)章')})
+                for placeholder in placeholders:
+                    placeholder_text = placeholder.get('placeholder', '')
+                    match = re.search(r'第(\d+)章', placeholder_text)
+                    if match:
+                        next_chapter_num = int(match.group(1))
+                        max_chapter_num = max(max_chapter_num, next_chapter_num - 1)
                 
-                chapters.append({
-                    'id': chapter_id,
-                    'title': title,
-                    'link': link,
-                    'chapter_number': chapter_number,
-                    'is_vip': is_vip
-                })
+                print(f"检测到最大章节号: {max_chapter_num}")
+                
+                if max_chapter_num > 0:
+                    print(f"生成 1-{max_chapter_num} 章节列表")
+                    for chapter_num in range(1, max_chapter_num + 1):
+                        # 构建统一的后台编辑链接
+                        edit_link = f"https://my.jjwxc.net/backend/chaptermodify.php?novelid={novel_id}&chapterid={chapter_num}"
+                        
+                        chapters.append({
+                            'id': str(chapter_num),
+                            'title': f"第{chapter_num}章",  # 临时标题，后续可以从编辑页面获取
+                            'link': edit_link,
+                            'chapter_number': chapter_num,
+                            'is_vip': False  # 暂时标记为免费，实际类型会在获取内容时确定
+                        })
             
             # 按章节编号排序
             chapters.sort(key=lambda x: x['chapter_number'])
@@ -525,149 +627,113 @@ class JJWXCBackupTool:
     
     def get_chapter_content(self, chapter_link, is_vip=False):
         """
-        获取章节内容（支持免费和VIP章节）
+        获取章节内容（统一后台方案）
         
         参数：
-            chapter_link (str): 章节链接
-            is_vip (bool): 是否为VIP章节
+            chapter_link (str): 后台编辑页面链接
+            is_vip (bool): 是否为VIP章节（保留参数，但不再影响处理逻辑）
             
         返回：
             str: 章节完整内容（包含正文和作者有话说）
             
-        免费章节处理：
-        1. 直接访问章节页面
-        2. 解析novelbody div中的正文内容
-        3. 解析note_str div中的作者有话说
-        4. 保留换行格式和HTML结构
+        统一处理方案：
+        - 所有章节都通过后台编辑页面获取内容
+        - 从textarea元素获取原始未加密内容
+        - 统一的格式保留和错误处理逻辑
+        - 避免前台页面结构变化的影响
         
-        VIP章节处理（核心功能）：
-        1. 从章节链接提取novelid和chapterid
-        2. 构建后台编辑页面URL (chaptermodify.php)
-        3. 从textarea获取未加密的原始内容：
+        处理流程：
+        1. 访问后台编辑页面（chaptermodify.php）
+        2. 解析textarea获取原始内容：
            - name='content': 章节正文
            - name='note': 作者有话说
-        4. 完整保留原始格式（换行、空行、特殊字符）
-        5. 清理HTML实体编码但保持文本结构
+        3. 清理HTML实体编码但保持文本结构
+        4. 组合正文和作者有话说内容
         
-        格式保留策略：
-        - 使用textarea.string获取原始文本
-        - 保留所有\n换行符和空行
-        - 只处理HTML实体转义（&lt; &gt; &amp;等）
-        - 不做额外的文本清理或格式化
-        
-        错误处理：
-        - 链接无效：返回错误信息
-        - 网络异常：返回异常描述
-        - 内容为空：返回获取失败提示
+        优势：
+        - 代码逻辑统一，维护简单
+        - 避免前台页面解析问题
+        - 格式保留效果更好
+        - 免费和VIP章节使用相同逻辑
         """
         if not chapter_link:
             return "章节链接无效"
+            
         try:
-            # 免费章节处理逻辑
-            if not is_vip:
-                if not chapter_link.startswith('http'):
-                    chapter_link = f"https://www.jjwxc.net{chapter_link}"
-                print(f"  获取免费章节内容...")
-                response = self.session.get(chapter_link, headers=self.headers, timeout=30)
-                response.encoding = 'gb18030'
-                soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
-                main_content = ""
-                novelbody_div = soup.find('div', class_='novelbody')
-                if novelbody_div:
-                    text_container = novelbody_div.select_one('div > div')
-                    if text_container:
-                        content_parts = []
-                        for element in text_container.children:
-                            if getattr(element, 'name', None) == 'br':
-                                content_parts.append('\n')
-                            elif getattr(element, 'string', None) and element.string.strip():
-                                content_parts.append(element.string.strip())
-                        main_content = ''.join(content_parts)
-                author_notes = ""
-                note_wrapper = soup.find('div', id='note_danmu_wrapper')
-                if note_wrapper:
-                    note_str = note_wrapper.find('div', id='note_str')
-                    if note_str:
-                        html_content = str(note_str)
-                        html_content = re.sub(r'<br\s*/?>', '\n', html_content, flags=re.IGNORECASE)
-                        clean_soup = BeautifulSoup(html_content, 'html.parser')
-                        author_notes = clean_soup.get_text(strip=True)
-                result_parts = []
-                if main_content and len(main_content) > 20:
-                    result_parts.append(main_content)
-                if author_notes and len(author_notes) > 10:
-                    result_parts.append('\n\n【作者有话说】')
-                    result_parts.append(author_notes)
-                if result_parts:
-                    result = ''.join(result_parts)
-                    if len(result.strip()) > 30:
-                        return result
-                return "内容获取失败：未找到有效内容"
-            # VIP章节处理逻辑 - 从作者后台编辑页面获取未加密内容
-            else:
-                # 从章节链接中提取novelid和chapterid
+            print(f"  获取章节内容（统一后台方案）...")
+            
+            # 如果传入的不是后台编辑链接，需要转换
+            if 'chaptermodify.php' not in chapter_link:
+                # 从原始链接提取novelid和chapterid
                 novel_id_match = re.search(r'novelid=(\d+)', chapter_link)
                 chapter_id_match = re.search(r'chapterid=(\d+)', chapter_link)
                 
                 if not novel_id_match or not chapter_id_match:
-                    return "VIP章节链接格式错误"
+                    return "无法从链接中提取章节信息"
                 
                 novel_id = novel_id_match.group(1)
                 chapter_id = chapter_id_match.group(1)
                 
                 # 构建后台编辑页面链接
                 edit_url = f"https://my.jjwxc.net/backend/chaptermodify.php?novelid={novel_id}&chapterid={chapter_id}"
-                print(f"  获取VIP章节内容（从编辑页面）...")
+            else:
+                edit_url = chapter_link
+            
+            # 设置请求头
+            headers = self.headers.copy()
+            headers['Referer'] = f'https://my.jjwxc.net/backend/managenovel.php'
+            
+            # 访问后台编辑页面
+            response = self.session.get(edit_url, headers=headers, timeout=30)
+            response.encoding = 'gb18030'
+            soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
+            
+            main_content = ""
+            author_notes = ""
+            
+            # 从编辑页面的textarea获取正文内容
+            chapterbody_textarea = soup.find('textarea', {'name': 'content'})
+            if chapterbody_textarea:
+                # 获取原始文本内容，保留所有格式
+                main_content = chapterbody_textarea.string or chapterbody_textarea.get_text()
+                # 如果没有内容，尝试从textarea内部获取
+                if not main_content.strip():
+                    main_content = ''.join(str(content) for content in chapterbody_textarea.contents)
                 
-                headers = self.headers.copy()
-                headers['Referer'] = f'https://my.jjwxc.net/backend/managenovel.php?novelid={novel_id}'
+                # 只清理HTML实体编码，保留所有换行和空行
+                main_content = main_content.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+                main_content = main_content.replace('&quot;', '"').replace('&#039;', "'")
+                main_content = main_content.replace('&nbsp;', ' ')  # 处理非断行空格
+            
+            # 获取作者有话说
+            authornote_textarea = soup.find('textarea', {'name': 'note'})
+            if authornote_textarea:
+                # 获取原始文本内容，保留所有格式
+                author_notes = authornote_textarea.string or authornote_textarea.get_text()
+                # 如果没有内容，尝试从textarea内部获取
+                if not author_notes.strip():
+                    author_notes = ''.join(str(content) for content in authornote_textarea.contents)
                 
-                response = self.session.get(edit_url, headers=headers, timeout=30)
-                response.encoding = 'gb18030'
-                soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
-                
-                main_content = ""
-                author_notes = ""
-                
-                # 从编辑页面的textarea获取正文内容
-                chapterbody_textarea = soup.find('textarea', {'name': 'content'})
-                if chapterbody_textarea:
-                    # 获取原始文本内容，保留所有格式
-                    main_content = chapterbody_textarea.string or chapterbody_textarea.get_text()
-                    # 如果没有内容，尝试从textarea内部获取
-                    if not main_content.strip():
-                        main_content = ''.join(str(content) for content in chapterbody_textarea.contents)
-                    
-                    # 只清理HTML实体编码，保留所有换行和空行
-                    main_content = main_content.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
-                    main_content = main_content.replace('&quot;', '"').replace('&#039;', "'")
-                    main_content = main_content.replace('&nbsp;', ' ')  # 处理非断行空格
-                
-                # 获取作者有话说
-                authornote_textarea = soup.find('textarea', {'name': 'note'})
-                if authornote_textarea:
-                    # 获取原始文本内容，保留所有格式
-                    author_notes = authornote_textarea.string or authornote_textarea.get_text()
-                    # 如果没有内容，尝试从textarea内部获取
-                    if not author_notes.strip():
-                        author_notes = ''.join(str(content) for content in authornote_textarea.contents)
-                    
-                    # 只清理HTML实体编码，保留所有换行和空行
-                    author_notes = author_notes.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
-                    author_notes = author_notes.replace('&quot;', '"').replace('&#039;', "'")
-                    author_notes = author_notes.replace('&nbsp;', ' ')  # 处理非断行空格
-                
-                result_parts = []
-                if main_content and len(main_content.strip()) > 20:
-                    result_parts.append(main_content)
-                if author_notes and len(author_notes.strip()) > 10:
-                    result_parts.append('\n\n【作者有话说】\n')
-                    result_parts.append(author_notes)
-                if result_parts:
-                    result = ''.join(result_parts)
-                    if len(result.strip()) > 30:
-                        return result
-                return "VIP内容获取失败：未找到有效内容"
+                # 只清理HTML实体编码，保留所有换行和空行
+                author_notes = author_notes.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+                author_notes = author_notes.replace('&quot;', '"').replace('&#039;', "'")
+                author_notes = author_notes.replace('&nbsp;', ' ')  # 处理非断行空格
+            
+            # 组合内容
+            result_parts = []
+            if main_content and len(main_content.strip()) > 20:
+                result_parts.append(main_content)
+            if author_notes and len(author_notes.strip()) > 10:
+                result_parts.append('\n\n【作者有话说】\n')
+                result_parts.append(author_notes)
+            
+            if result_parts:
+                result = ''.join(result_parts)
+                if len(result.strip()) > 30:
+                    return result
+            
+            return "内容获取失败：未找到有效内容"
+            
         except Exception as e:
             print(f"  章节内容获取出错: {str(e)}")
             return f"内容获取失败：{str(e)}"
@@ -772,9 +838,9 @@ class JJWXCBackupTool:
                     chapter_title = f"第{chapter.get('chapter_number', idx+1)}章 {chapter['title']}"
                     doc.add_heading(chapter_title, level=1)
                     
-                    # 获取章节内容
+                    # 获取章节内容（统一后台方案）
                     print(f"正在获取: {chapter_title} [{idx+1}/{total_chapters}]")
-                    content = self.get_chapter_content(chapter['link'], chapter.get('is_vip', False))
+                    content = self.get_chapter_content(chapter['link'])
                     
                     # 检查内容是否有效
                     if content and not content.startswith("内容获取失败") and not content.startswith("章节链接无效"):
