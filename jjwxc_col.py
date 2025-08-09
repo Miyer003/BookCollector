@@ -1,3 +1,28 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+=================================================================
+                晋江文学城作品备份工具 v5.0
+=================================================================
+功能说明:
+- 通过作者后台批量备份作品到DOCX格式
+- 支持免费章节和VIP章节的内容获取  
+- 自动保留原文格式和作者有话说
+- 实时保存，边下载边生成文档
+
+技术特性:
+- Cookie认证：支持复杂Cookie格式解析
+- 格式保留：完整保持换行符和空行
+- 智能重试：网络异常自动重试机制
+
+使用前提:
+1. 需要晋江作者账号的登录Cookie
+2. 在my_cookie.txt文件中粘贴完整Cookie字符串
+3. 确保网络连接稳定
+
+=================================================================
+"""
+
 import os
 import time
 import random
@@ -11,27 +36,51 @@ import json
 from datetime import datetime
 import urllib.parse
 
-COOKIE_FILE = "my_cookie.txt"
+# ========================= 全局配置 =========================
+COOKIE_FILE = "my_cookie.txt"  # Cookie文件路径
 
 class JJWXCBackupTool:
+    """
+    晋江文学城作品备份工具主类
+    
+    主要功能：
+    1. Cookie认证和会话管理
+    2. 作品列表获取和解析
+    3. 章节内容抓取（免费+VIP）
+    4. DOCX文档生成和格式化
+    
+    使用流程：
+    init() -> check_login() -> get_novel_list() -> select_novels() -> backup_novels()
+    """
+    
     def __init__(self):
-        # 创建输出目录
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.output_dir = f"backup_{timestamp}"
-        os.makedirs(self.output_dir, exist_ok=True)
+        """
+        初始化备份工具
         
-        # 设置会话
+        功能：
+        - 创建输出目录结构 (backup/YYYYMMDD_HHMMSS/)
+        - 初始化HTTP会话和请求头
+        - 加载Cookie文件并解析认证信息
+        - 配置网络重试策略
+        """
+        # 创建输出目录 - 使用timestamp确保唯一性
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.output_dir = os.path.join("backup", timestamp)
+        os.makedirs(self.output_dir, exist_ok=True)
+        print(f"输出目录: {self.output_dir}")
+        
+        # 设置HTTP会话 - 保持Cookie和连接复用
         self.session = requests.Session()
         self.headers = self.get_default_headers()
         
         # 初始化作者后台URL
         self.author_backend_url = None
         
-        # 加载Cookie文件
+        # 加载并解析Cookie文件
         cookie_count = self.load_cookie()
         print(f"已设置 {cookie_count} 个Cookie参数")
         
-        # 设置请求重试策略
+        # 设置请求重试策略 - 应对网络波动
         self.session.mount('https://', requests.adapters.HTTPAdapter(
             max_retries=3,
             pool_connections=10,
@@ -39,7 +88,15 @@ class JJWXCBackupTool:
         ))
 
     def get_default_headers(self):
-        """返回默认请求头"""
+        """
+        获取默认HTTP请求头
+        
+        返回：
+            dict: 包含User-Agent、Accept等标准浏览器请求头的字典
+            
+        用途：
+            模拟真实浏览器访问，避免被网站反爬虫策略拦截
+        """
         return {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -51,13 +108,47 @@ class JJWXCBackupTool:
         }
     
     def decode_unicode_escape(self, s):
-        """解码 %uXXXX 格式的Unicode转义序列"""
+        """
+        解码Unicode转义序列
+        
+        参数：
+            s (str): 包含%uXXXX格式Unicode转义的字符串
+            
+        返回：
+            str: 解码后的字符串
+            
+        说明：
+            晋江Cookie中可能包含%u格式的Unicode转义字符
+            需要特殊处理才能正确解析中文字符
+        """
         def replace_unicode(match):
             return chr(int(match.group(1), 16))
         return re.sub(r'%u([0-9a-fA-F]{4})', replace_unicode, s)
     
     def load_cookie(self):
-        """从文件加载Cookie并处理特殊编码"""
+        """
+        从文件加载并解析Cookie
+        
+        返回：
+            int: 成功解析的Cookie数量
+            
+        功能：
+        1. 读取my_cookie.txt文件内容
+        2. 处理Unicode转义序列(%uXXXX)
+        3. 智能解析复杂Cookie格式（包括JSON值）
+        4. 设置到HTTP会话中
+        
+        Cookie格式支持：
+        - 标准键值对: key=value; key2=value2
+        - JSON值: key={"json":"value"}  
+        - URL编码值: key=%E4%B8%AD%E6%96%87
+        - Unicode转义: key=%u4E2D%u6587
+        
+        错误处理：
+        - 文件不存在：返回0
+        - 解析失败：跳过该Cookie并继续
+        - JSON验证：确保JSON格式Cookie的有效性
+        """
         cookie_count = 0
         if os.path.exists(COOKIE_FILE):
             try:
@@ -66,10 +157,10 @@ class JJWXCBackupTool:
                     raw_cookie = f.read().strip()
                     print(f"原始Cookie内容: {raw_cookie[:100]}...")
                     
-                    # 处理Unicode转义序列 (%uXXXX)
+                    # 第一步：处理Unicode转义序列 (%uXXXX)
                     decoded_cookie = self.decode_unicode_escape(raw_cookie)
                     
-                    # 智能Cookie解析：处理包含JSON的复杂Cookie
+                    # 第二步：智能Cookie解析 - 处理包含JSON的复杂Cookie
                     cookies_dict = {}
                     current_pos = 0
                     
@@ -210,10 +301,10 @@ class JJWXCBackupTool:
             soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
             novels = []
             
-            # 保存页面用于调试
-            with open(os.path.join(self.output_dir, "novel_list.html"), "w", encoding="utf-8") as f:
-                f.write(response.text)
-            print("作品列表页面已保存: novel_list.html")
+            # 保存页面用于调试（已禁用，如需调试请取消注释）
+            # with open(os.path.join(self.output_dir, "novel_list.html"), "w", encoding="utf-8") as f:
+            #     f.write(response.text)
+            # print("作品列表页面已保存: novel_list.html")
             
             # 查找作品管理链接
             # 在晋江后台，作品管理链接的格式是: managenovel.php?novelid=XXXXX
@@ -316,6 +407,7 @@ class JJWXCBackupTool:
             headers['Referer'] = 'https://my.jjwxc.net/backend/'
             response = self.session.get(backend_url, headers=headers, timeout=30)
             response.encoding = 'gb18030'
+            
             soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
             novel_intro = ""
             intro_textarea = soup.find('textarea', {'id': 'novelintro'})
@@ -328,7 +420,32 @@ class JJWXCBackupTool:
             return ""
 
     def get_chapters(self, novel_link):
-        """获取作品章节列表"""
+        """
+        获取作品的完整章节列表
+        
+        参数：
+            novel_link (str): 作品管理页面链接
+            
+        返回：
+            list: 章节信息列表，每个元素包含：
+                - id: 章节ID
+                - title: 章节标题  
+                - link: 章节访问链接
+                - chapter_number: 章节编号
+                - is_vip: 是否VIP章节
+                
+        功能流程：
+        1. 从链接提取作品ID
+        2. 访问后台章节管理页面
+        3. 解析章节表格（包括隐藏行）
+        4. 区分免费和VIP章节
+        5. 按章节编号排序
+        
+        章节识别逻辑：
+        - VIP章节：链接包含'onebook_vip.php'
+        - 免费章节：其他章节
+        - 隐藏章节：包括display:none的行
+        """
         if not novel_link:
             return []
             
@@ -343,34 +460,61 @@ class JJWXCBackupTool:
             print(f"获取所有章节列表: {backend_url}")
             response = self.session.get(backend_url, headers=self.headers, timeout=30)
             response.encoding = 'gb18030'
+            
             soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
             chapters = []
-            # 晋江后台章节管理页面通常有章节列表table
-            # 解析所有tr（每一章）
-            for idx, tr in enumerate(soup.find_all('tr')):
-                chapter_id_tag = tr.find('input', {'name': 'chapterid'})
-                title_tag = tr.find('a', href=True)
-                if chapter_id_tag and title_tag:
-                    chapter_id = chapter_id_tag['value']
-                    title = title_tag.get_text(strip=True)
-                    # 判断是否VIP章节
-                    is_vip = False
-                    # 通常VIP章节会有VIP标识（如class、span、img等）
-                    vip_tag = tr.find('span', class_=lambda x: x and 'vip' in x.lower())
-                    if vip_tag or 'VIP' in title or 'vip' in title.lower():
-                        is_vip = True
-                    # 拼接访问链接
-                    if is_vip:
-                        link = f"https://my.jjwxc.net/onebook_vip.php?novelid={novel_id}&chapterid={chapter_id}"
+            
+            # 查找章节表格，包括隐藏的章节行
+            # 查找所有包含章节信息的tr行，包括style="display:none;"的隐藏行
+            chapter_rows = soup.find_all('tr', {'bgcolor': '#eefaee'})
+            
+            for tr in chapter_rows:
+                # 查找章节ID input
+                chapter_id_input = tr.find('input', {'name': 'chapterid'})
+                if not chapter_id_input:
+                    continue
+                    
+                chapter_id = chapter_id_input.get('value')
+                if not chapter_id:
+                    continue
+                
+                # 查找章节标题链接
+                title_link = tr.find('a', href=True)
+                if not title_link:
+                    continue
+                    
+                title = title_link.get_text(strip=True)
+                href = title_link.get('href')
+                
+                # 判断是否VIP章节 - 通过链接或标题中的VIP标识
+                is_vip = False
+                if 'onebook_vip.php' in href or '[VIP]' in title_link.get_text():
+                    is_vip = True
+                
+                # 提取章节编号（从第二个td中获取）
+                chapter_num_td = tr.find_all('td')[1]  # 第二个td包含章节编号
+                chapter_number = int(chapter_num_td.get_text(strip=True))
+                
+                # 构建完整的访问链接
+                if not href.startswith('http'):
+                    if href.startswith('//'):
+                        link = f"https:{href}"
                     else:
-                        link = f"https://www.jjwxc.net/onebook.php?novelid={novel_id}&chapterid={chapter_id}"
-                    chapters.append({
-                        'id': chapter_id,
-                        'title': title,
-                        'link': link,
-                        'chapter_number': idx + 1,
-                        'is_vip': is_vip
-                    })
+                        link = f"https://www.jjwxc.net{href}"
+                else:
+                    link = href
+                
+                chapters.append({
+                    'id': chapter_id,
+                    'title': title,
+                    'link': link,
+                    'chapter_number': chapter_number,
+                    'is_vip': is_vip
+                })
+            
+            # 按章节编号排序
+            chapters.sort(key=lambda x: x['chapter_number'])
+            
             vip_count = sum(1 for c in chapters if c['is_vip'])
             free_count = len(chapters) - vip_count
             print(f"成功解析 {len(chapters)} 个章节，其中免费章节数量：{free_count}，VIP章节数量：{vip_count}")
@@ -380,7 +524,42 @@ class JJWXCBackupTool:
             return []
     
     def get_chapter_content(self, chapter_link, is_vip=False):
-        """获取章节内容（区分免费和VIP章节）"""
+        """
+        获取章节内容（支持免费和VIP章节）
+        
+        参数：
+            chapter_link (str): 章节链接
+            is_vip (bool): 是否为VIP章节
+            
+        返回：
+            str: 章节完整内容（包含正文和作者有话说）
+            
+        免费章节处理：
+        1. 直接访问章节页面
+        2. 解析novelbody div中的正文内容
+        3. 解析note_str div中的作者有话说
+        4. 保留换行格式和HTML结构
+        
+        VIP章节处理（核心功能）：
+        1. 从章节链接提取novelid和chapterid
+        2. 构建后台编辑页面URL (chaptermodify.php)
+        3. 从textarea获取未加密的原始内容：
+           - name='content': 章节正文
+           - name='note': 作者有话说
+        4. 完整保留原始格式（换行、空行、特殊字符）
+        5. 清理HTML实体编码但保持文本结构
+        
+        格式保留策略：
+        - 使用textarea.string获取原始文本
+        - 保留所有\n换行符和空行
+        - 只处理HTML实体转义（&lt; &gt; &amp;等）
+        - 不做额外的文本清理或格式化
+        
+        错误处理：
+        - 链接无效：返回错误信息
+        - 网络异常：返回异常描述
+        - 内容为空：返回获取失败提示
+        """
         if not chapter_link:
             return "章节链接无效"
         try:
@@ -424,59 +603,123 @@ class JJWXCBackupTool:
                     if len(result.strip()) > 30:
                         return result
                 return "内容获取失败：未找到有效内容"
-            # VIP章节处理逻辑（预留结构，待填写）
+            # VIP章节处理逻辑 - 从作者后台编辑页面获取未加密内容
             else:
-                if not chapter_link.startswith('http'):
-                    chapter_link = f"https://my.jjwxc.net{chapter_link}"
-                print(f"  获取VIP章节内容...")
-                response = self.session.get(chapter_link, headers=self.headers, timeout=30)
+                # 从章节链接中提取novelid和chapterid
+                novel_id_match = re.search(r'novelid=(\d+)', chapter_link)
+                chapter_id_match = re.search(r'chapterid=(\d+)', chapter_link)
+                
+                if not novel_id_match or not chapter_id_match:
+                    return "VIP章节链接格式错误"
+                
+                novel_id = novel_id_match.group(1)
+                chapter_id = chapter_id_match.group(1)
+                
+                # 构建后台编辑页面链接
+                edit_url = f"https://my.jjwxc.net/backend/chaptermodify.php?novelid={novel_id}&chapterid={chapter_id}"
+                print(f"  获取VIP章节内容（从编辑页面）...")
+                
+                headers = self.headers.copy()
+                headers['Referer'] = f'https://my.jjwxc.net/backend/managenovel.php?novelid={novel_id}'
+                
+                response = self.session.get(edit_url, headers=headers, timeout=30)
                 response.encoding = 'gb18030'
                 soup = BeautifulSoup(response.content, 'html.parser', from_encoding='gb18030')
+                
                 main_content = ""
-                # 提取VIP正文内容
-                novelbody_div = soup.find('div', class_='novelbody')
-                if novelbody_div:
-                    noveltext_div = novelbody_div.find('div', class_=lambda x: x and x.startswith('noveltext'))
-                    if noveltext_div:
-                        content_div = noveltext_div.find('div', id=lambda x: x and x.startswith('content_'))
-                        if content_div:
-                            content_parts = []
-                            for element in content_div.children:
-                                if getattr(element, 'name', None) == 'br':
-                                    content_parts.append('\n')
-                                elif getattr(element, 'string', None) and element.string.strip():
-                                    content_parts.append(element.string.strip())
-                            main_content = ''.join(content_parts)
                 author_notes = ""
-                # 提取VIP作者有话说
-                if novelbody_div:
-                    noveltext_div = novelbody_div.find('div', class_=lambda x: x and x.startswith('noveltext'))
-                    if noveltext_div:
-                        note_wrapper = noveltext_div.find('div', id='note_danmu_wrapper')
-                        if note_wrapper:
-                            note_main = note_wrapper.find('div', id='note_main')
-                            if note_main:
-                                html_content = str(note_main)
-                                html_content = re.sub(r'<br\s*/?>', '\n', html_content, flags=re.IGNORECASE)
-                                clean_soup = BeautifulSoup(html_content, 'html.parser')
-                                author_notes = clean_soup.get_text(strip=True)
+                
+                # 从编辑页面的textarea获取正文内容
+                chapterbody_textarea = soup.find('textarea', {'name': 'content'})
+                if chapterbody_textarea:
+                    # 获取原始文本内容，保留所有格式
+                    main_content = chapterbody_textarea.string or chapterbody_textarea.get_text()
+                    # 如果没有内容，尝试从textarea内部获取
+                    if not main_content.strip():
+                        main_content = ''.join(str(content) for content in chapterbody_textarea.contents)
+                    
+                    # 只清理HTML实体编码，保留所有换行和空行
+                    main_content = main_content.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+                    main_content = main_content.replace('&quot;', '"').replace('&#039;', "'")
+                    main_content = main_content.replace('&nbsp;', ' ')  # 处理非断行空格
+                
+                # 获取作者有话说
+                authornote_textarea = soup.find('textarea', {'name': 'note'})
+                if authornote_textarea:
+                    # 获取原始文本内容，保留所有格式
+                    author_notes = authornote_textarea.string or authornote_textarea.get_text()
+                    # 如果没有内容，尝试从textarea内部获取
+                    if not author_notes.strip():
+                        author_notes = ''.join(str(content) for content in authornote_textarea.contents)
+                    
+                    # 只清理HTML实体编码，保留所有换行和空行
+                    author_notes = author_notes.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+                    author_notes = author_notes.replace('&quot;', '"').replace('&#039;', "'")
+                    author_notes = author_notes.replace('&nbsp;', ' ')  # 处理非断行空格
+                
                 result_parts = []
-                if main_content and len(main_content) > 20:
+                if main_content and len(main_content.strip()) > 20:
                     result_parts.append(main_content)
-                if author_notes and len(author_notes) > 10:
-                    result_parts.append('\n\n【作者有话说】')
+                if author_notes and len(author_notes.strip()) > 10:
+                    result_parts.append('\n\n【作者有话说】\n')
                     result_parts.append(author_notes)
                 if result_parts:
                     result = ''.join(result_parts)
                     if len(result.strip()) > 30:
                         return result
-                return "内容获取失败：未找到有效内容"
+                return "VIP内容获取失败：未找到有效内容"
         except Exception as e:
             print(f"  章节内容获取出错: {str(e)}")
             return f"内容获取失败：{str(e)}"
 
     def create_docx_with_realtime_save(self, novel, chapters):
-        """创建DOCX文档并实时保存章节内容"""
+        """
+        创建DOCX文档并实时保存章节内容
+        
+        参数：
+            novel (dict): 作品信息字典
+            chapters (list): 章节列表
+            
+        功能特性：
+        1. 文档结构创建：
+           - 作品标题（0级标题，居中）
+           - 作品信息（ID、字数、状态）
+           - 作品简介（从后台获取）
+           - 分页符分隔
+           
+        2. 章节处理：
+           - 逐章节获取和添加内容
+           - 实时保存（每章节保存一次）
+           - 章节标题格式化（第X章 标题）
+           - 章节间分隔符
+           
+        3. 内容格式化：
+           - 调用_add_content_to_doc处理正文
+           - 自动分离作者有话说
+           - 保留原始换行和空行
+           - 错误章节标红显示
+           
+        4. 实时保存机制：
+           - 创建初始文档结构立即保存
+           - 每添加一章节内容后保存
+           - 用户可随时打开查看进度
+           - 避免程序中断导致数据丢失
+           
+        5. 文件命名：
+           - 清理标题中的非法字符
+           - 生成safe的文件名
+           - 保存到backup/timestamp/目录
+           
+        6. 错误处理：
+           - 章节获取失败：标红显示错误信息
+           - 网络异常：继续处理下一章节
+           - 文档保存异常：记录错误并继续
+           
+        7. 进度显示：
+           - 显示当前章节进度 [X/总数]
+           - 预估剩余时间
+           - 章节获取状态反馈
+        """
         if not chapters:
             print(f"没有找到章节内容，跳过 {novel['title']}")
             return
@@ -531,7 +774,7 @@ class JJWXCBackupTool:
                     
                     # 获取章节内容
                     print(f"正在获取: {chapter_title} [{idx+1}/{total_chapters}]")
-                    content = self.get_chapter_content(chapter['link'])
+                    content = self.get_chapter_content(chapter['link'], chapter.get('is_vip', False))
                     
                     # 检查内容是否有效
                     if content and not content.startswith("内容获取失败") and not content.startswith("章节链接无效"):
@@ -578,7 +821,45 @@ class JJWXCBackupTool:
         return filename
     
     def _add_content_to_doc(self, doc, content):
-        """将内容添加到文档中"""
+        """
+        将章节内容添加到DOCX文档中（格式保留版）
+        
+        参数：
+            doc: python-docx Document对象
+            content (str): 章节完整内容
+            
+        功能：
+        1. 内容分离：
+           - 以【作者有话说】为分界点
+           - 分离正文和作者有话说两部分
+           - 去除首尾空白但保留内部格式
+           
+        2. 正文处理：
+           - 按换行符(\n)分割为行
+           - 每行创建独立段落
+           - 完整保留空行（空段落）
+           - 不做任何文本清理或去空格
+           
+        3. 作者有话说处理：
+           - 添加蓝色二级标题"作者有话说"
+           - 同样按行处理内容
+           - 保持与正文相同的格式处理方式
+           
+        格式保留策略（核心）：
+        - split('\n')：严格按换行符分割
+        - 不使用strip()：保留每行原始内容
+        - 空行处理：创建空段落保持版式
+        - 段落独立：每行一个段落确保换行效果
+        
+        与之前版本区别：
+        - 旧版：复杂的段落和换行处理，容易丢失格式
+        - 新版：简单的行级处理，完美保留原始格式
+        
+        使用场景：
+        - VIP章节：保留从后台获取的原始格式
+        - 免费章节：保留从页面解析的格式
+        - 作者有话说：保留特殊格式和换行
+        """
         # 分离正文和作者有话说
         main_text = ""
         author_notes = ""
@@ -593,40 +874,22 @@ class JJWXCBackupTool:
         
         # 添加正文内容
         if main_text:
-            paragraphs = main_text.split('\n\n')
-            for para in paragraphs:
-                if para.strip():
-                    lines = para.split('\n')
-                    if len(lines) == 1:
-                        doc.add_paragraph(lines[0].strip())
-                    else:
-                        paragraph = doc.add_paragraph()
-                        for line_idx, line in enumerate(lines):
-                            line = line.strip()
-                            if line:
-                                if line_idx > 0:
-                                    paragraph.add_run().add_break()
-                                paragraph.add_run(line)
+            # 按行分割，保留所有换行符和空行
+            lines = main_text.split('\n')
+            for line in lines:
+                # 保留原始内容，包括空行
+                doc.add_paragraph(line)
         
         # 添加作者有话说部分
         if author_notes:
             author_heading = doc.add_heading('作者有话说', level=2)
             author_heading.runs[0].font.color.rgb = RGBColor(0, 0, 255)
             
-            note_paragraphs = author_notes.split('\n\n')
-            for note_para in note_paragraphs:
-                if note_para.strip():
-                    lines = note_para.split('\n')
-                    if len(lines) == 1:
-                        doc.add_paragraph(lines[0].strip())
-                    else:
-                        paragraph = doc.add_paragraph()
-                        for line_idx, line in enumerate(lines):
-                            line = line.strip()
-                            if line:
-                                if line_idx > 0:
-                                    paragraph.add_run().add_break()
-                                paragraph.add_run(line)
+            # 按行分割，保留所有换行符和空行
+            lines = author_notes.split('\n')
+            for line in lines:
+                # 保留原始内容，包括空行
+                doc.add_paragraph(line)
     
     def select_novels_to_backup(self, novels):
         """用户选择要备份的作品"""
