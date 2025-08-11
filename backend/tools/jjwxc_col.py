@@ -1,28 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-=================================================================
-                晋江文学城作品备份工具 v5.0
-=================================================================
-功能说明:
-- 通过作者后台批量备份作品到DOCX格式
-- 支持免费章节和VIP章节的内容获取  
-- 自动保留原文格式和作者有话说
-- 实时保存，边下载边生成文档
-
-技术特性:
-- Cookie认证：支持复杂Cookie格式解析
-- 格式保留：完整保持换行符和空行
-- 智能重试：网络异常自动重试机制
-
-使用前提:
-1. 需要晋江作者账号的登录Cookie
-2. 在my_cookie.txt文件中粘贴完整Cookie字符串
-3. 确保网络连接稳定
-
-=================================================================
-"""
-
 import os
 import time
 import random
@@ -36,23 +11,9 @@ import json
 from datetime import datetime
 import urllib.parse
 
-# ========================= 全局配置 =========================
-COOKIE_FILE = "my_cookie.txt"  # Cookie文件路径
+COOKIE_FILE = "my_cookie.txt"
 
 class JJWXCBackupTool:
-    """
-    晋江文学城作品备份工具主类
-    
-    主要功能：
-    1. Cookie认证和会话管理
-    2. 作品列表获取和解析
-    3. 章节内容抓取（免费+VIP）
-    4. DOCX文档生成和格式化
-    
-    使用流程：
-    init() -> check_login() -> get_novel_list() -> select_novels() -> backup_novels()
-    """
-    
     def __init__(self):
         """
         初始化备份工具
