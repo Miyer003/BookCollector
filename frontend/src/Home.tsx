@@ -3,6 +3,7 @@ import Paper from '@mui/material/Paper';
 import Card from '@mui/material/Card';
 import Button from '@mui/material/Button';
 import Box from '@mui/material/Box';
+import { Typography } from '@mui/material';
 
 // ECharts马卡龙配色
 const macaronsColors = [
@@ -19,10 +20,13 @@ export default function Home() {
   return (
     <div>
         <Box>
-            <Paper elevation={3} style={{ padding: '20px', marginBottom: '20px', background: getRandomColor() }}>
-                <h1>Welcome! MY</h1>
-                <h6>刷新有惊喜～</h6>
-                <p>Your personal book collection management system.</p>
+            <Paper elevation={3} sx={{p: 3, mb: 3, bgcolor: getRandomColor(), justifyContent: 'center' }}>
+                <Typography color='white' variant='h4'>
+                    Welcome! MY~
+                </Typography>
+                <Typography color='#b6adadff' variant='body1'>
+                    刷新有惊喜～
+                </Typography>
             </Paper>
             <Card style={{ padding: '20px', marginBottom: '20px', background: getRandomColor() }}>
                 <h2>Get Started</h2>
