@@ -1,15 +1,19 @@
 # 隐私文件
 my_cookie.txt
 mybook.txt
+backend/my_cookie.txt
+backend/mybook.txt
 
 # 输出目录
 backup/
 backup_*/
+backend/backup/
+backend/backup_*/
 
 # 测试输出
-tests/*.json
-tests/*.docx
-tests/*.html
+backend/tests/*.json
+backend/tests/*.docx
+backend/tests/*.html
 
 # Python环境
 venv/
