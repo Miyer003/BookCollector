@@ -21,6 +21,14 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Node环境
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
 # IDE文件
 .vscode/
 .idea/
